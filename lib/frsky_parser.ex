@@ -1,19 +1,10 @@
 defmodule FrskyParser do
-  @moduledoc """
-  Documentation for `FrskyParser`.
-  """
-
-  @doc """
-  Hello world.
-
-  ## Examples
-
-      iex> FrskyParser.hello()
-      :world
-
-  """
   require Logger
   use Bitwise
+
+  @moduledoc """
+  Parse and store SBus packets coming from FrSky receiver.
+  """
 
   @pw_mid 991
   @pw_half_range 819
@@ -22,6 +13,7 @@ defmodule FrskyParser do
   @end_byte 0x00
   @payload_length 24
 
+  @doc false
   defstruct parser_state: 0,
             prev_byte: 0,
             payload_rev: [],
@@ -29,22 +21,45 @@ defmodule FrskyParser do
             channels: [],
             remaining_data: []
 
+  # Public API
+  @doc """
+  Create a new FrskyParser struct that can parse new serial data and
+  store the most recently received RX output.
+  """
   @spec new() :: struct()
   def new() do
     %FrskyParser{}
   end
 
+  @doc """
+  Appends the latest data to any leftover data from the previous `check_for_new_messages` operation.
+
+  Arguments are the `%FrskyParser{}` struct and the newest serial data from the receiver (must already by converted from binary to list)
+
+  Returns `{%FrskyParser{}, [list of channels]}`. If no valid SBus messages was found, the list of channels will be empty.
+
+  NOTE: After a valid message has been received, the `clear` function must be called if you do not want the channel values to persist.
+  Otherwise this function will continue to return a populated channel list even if a new valid message has not been received.
+
+  Example:
+  ```
+  {frsky_parser, channel_values} = FrskyParser.check_for_new_messages(frsky_parser, new_data_list)
+  frsky_parser = FrskyParser.clear()
+  ```
+  """
+
   @spec check_for_new_messages(struct(), list()) :: tuple()
   def check_for_new_messages(frsky, data) do
     frsky = parse_data(frsky, data)
 
-    if (frsky.payload_ready) do
+    if frsky.payload_ready do
       {frsky, frsky.channels}
     else
       {frsky, []}
     end
   end
 
+  @doc false
   @spec parse_data(struct(), list()) :: struct()
   def parse_data(frsky, data) do
     data = frsky.remaining_data ++ data
@@ -63,9 +78,11 @@ defmodule FrskyParser do
     end
   end
 
+  @doc false
   @spec parse_byte(struct(), integer()) :: struct()
   def parse_byte(frsky, byte) do
     parser_state = frsky.parser_state
+
     frsky =
       if parser_state == 0 do
         if byte == @start_byte and frsky.prev_byte == @end_byte do
@@ -97,6 +114,7 @@ defmodule FrskyParser do
     %{frsky | prev_byte: byte}
   end
 
+  @doc false
   @spec parse_payload(struct(), list()) :: struct()
   def parse_payload(frsky, payload_rev) do
     payload = Enum.reverse(payload_rev)
@@ -123,8 +141,7 @@ defmodule FrskyParser do
     channels =
       Enum.reduce(Enum.reverse(channels), [], fn value, acc ->
         # [(value &&& 0x07FF)] ++ acc
-        value_float =
-          constrain(((value &&& 0x07FF) - @pw_mid) / @pw_half_range, -1.0, 1.0)
+        value_float = constrain(((value &&& 0x07FF) - @pw_mid) / @pw_half_range, -1.0, 1.0)
 
         [value_float] ++ acc
       end)
@@ -132,24 +149,26 @@ defmodule FrskyParser do
     flag_byte = Enum.at(payload, 22)
     # failsafe_active = ((flag_byte &&& 0x08) > 0)
     frame_lost = (flag_byte &&& 0x04) > 0
-    # str = Enum.reduce(0..5,"", fn (index, acc) ->
-    #   acc <> "#{Common.Utils.eftb(Enum.at(channels, index),3)},"
-    # end)
-    # Logger.debug(str)
-    # Logger.warn(Common.Utils.eftb_list(channels,3))
     %{frsky | payload_ready: !frame_lost, channels: channels}
   end
 
+  @doc """
+  Returns the stored channel values.
+  """
   @spec channels(struct()) :: list()
   def channels(frsky) do
     frsky.channels
   end
 
+  @doc """
+  Empties the stored channel value list.
+  """
   @spec clear(struct()) :: struct()
   def clear(frsky) do
     %{frsky | payload_ready: false}
   end
 
+  @doc false
   @spec constrain(number(), number(), number()) :: number()
   def constrain(x, min_value, max_value) do
     case x do
